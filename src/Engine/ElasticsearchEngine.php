@@ -91,9 +91,11 @@ class ElasticsearchEngine extends Engine
      */
     public function search(Builder $builder)
     {
+		
         return $this->performSearch($builder, array_filter([
             'numericFilters' => $this->filters($builder),
             'size' => $builder->limit,
+			
         ]));
     }
 
@@ -113,7 +115,8 @@ class ElasticsearchEngine extends Engine
             'size' => $perPage,
         ]);
 
-       $result['nbPages'] = $result['hits']['total']/$perPage;
+       ///7.3.2   $result['nbPages'] = $result['hits']['total']['value']/$perPage;
+	   $result['nbPages'] = $result['hits']['total']/$perPage;
 
         return $result;
     }
@@ -127,6 +130,7 @@ class ElasticsearchEngine extends Engine
      */
     protected function performSearch(Builder $builder, array $options = [])
     {
+		
         $type = $builder->model->searchableAs();
         $filter = config('scout.elasticsearch.filter');
         $query = str_replace($filter, '', $builder->query);
@@ -140,15 +144,33 @@ class ElasticsearchEngine extends Engine
                         'must' => [
                             [
                                 'query_string' => [
-                                    'query' => $query
+                                    'query' => $query,
+									
                                 ]
                             ]
                         ]
                     ]
                 ]
+				
             ]
         ];
+		
 
+		/**
+         * 这里使用了 highlight 的配置
+         */
+		///////////李辉
+        if ($builder->model->searchSettings
+            && isset($builder->model->searchSettings['attributesToHighlight'])
+        ) {
+            $attributes = $builder->model->searchSettings['attributesToHighlight'];
+            foreach ($attributes as $attribute) {
+                $params['body']['highlight']['fields'][$attribute] = new \stdClass();
+            }
+        }
+		///////////李辉
+		
+		
         if ($sort = $this->sort($builder)) {
             $params['body']['sort'] = $sort;
         }
@@ -165,7 +187,12 @@ class ElasticsearchEngine extends Engine
             $params['body']['query']['bool']['must'] = array_merge($params['body']['query']['bool']['must'],
                 $options['numericFilters']);
         }
-
+		
+		if (isset($options['range']) && count($options['range'])) {
+            $params['body']['query']['bool']['must'] = array_merge($params['body']['query']['bool']['must'],
+                $options['range']);
+        }
+		 
         if ($builder->callback) {
             return call_user_func(
                 $builder->callback,
@@ -173,8 +200,10 @@ class ElasticsearchEngine extends Engine
                 $builder->query,
                 $params
             );
-        }
+        } 
+//echo json_encode($params);
 
+//die();
         return $this->elastic->search($params);
     }
 
@@ -188,7 +217,7 @@ class ElasticsearchEngine extends Engine
     {
         return collect($builder->wheres)->map(function ($value, $key) {
             if (is_array($value)) {
-                return ['terms' => [$key => $value]];
+                return  [$key => $value];
             }
 
             return ['match_phrase' => [$key => $value]];
@@ -228,7 +257,15 @@ class ElasticsearchEngine extends Engine
         )->get()->keyBy($model->getKeyName());
 
         return collect($results['hits']['hits'])->map(function ($hit) use ($model, $models) {
-            return isset($models[$hit['_id']]) ? $models[$hit['_id']] : null;
+           $one=isset($models[$hit['_id']]) ? $models[$hit['_id']] : null;
+			///////李辉
+			if (isset($hit['highlight'])) {
+                $one->highlight = $hit['highlight'];
+            }
+			///////李辉
+		
+			return  $one;
+			
         })->filter()->values();
     }
 
